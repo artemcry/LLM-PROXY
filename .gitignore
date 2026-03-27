@@ -20,3 +20,8 @@ eggs/
 # OS
 .DS_Store
 Thumbs.db
+
+
+#  Temporary
+logs/
+tmp/

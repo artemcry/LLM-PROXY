@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import sys
+import logging
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -15,6 +16,14 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from google import genai
 from google.genai import types
+
+# Setup logger - will be configured by server_bg.py or use defaults
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(message)s',
+    datefmt='%H:%M:%S'
+)
+logger = logging.getLogger("llmproxy")
 
 load_dotenv()
 
@@ -89,10 +98,10 @@ async def describe_image(image_bytes: bytes, mime_type: str) -> str:
     key = hashlib.sha256(image_bytes).hexdigest()
     if key in _image_cache:
         _image_cache.move_to_end(key)
-        print(f"    [cache hit] {key[:12]}")
+        logger.info(f"    [cache hit] {key[:12]}")
         return _image_cache[key]
 
-    print(f"    Gemini <- {mime_type} {len(image_bytes)//1024}KB")
+    logger.info(f"    Gemini <- {mime_type} {len(image_bytes)//1024}KB")
     response = await gemini_client.aio.models.generate_content(
         model=GEMINI_MODEL,
         contents=[
@@ -104,7 +113,7 @@ async def describe_image(image_bytes: bytes, mime_type: str) -> str:
         config=types.GenerateContentConfig()
     )
     description = response.text
-    print(f"    Gemini -> {len(description)} chars")
+    logger.info(f"    Gemini -> {len(description)} chars")
 
     _image_cache[key] = description
     if len(_image_cache) > IMAGE_CACHE_MAX:
@@ -159,7 +168,7 @@ async def replace_images(messages: list) -> tuple[list, bool]:
                     err = str(result)
                     if "429" in err or "RESOURCE_EXHAUSTED" in err:
                         quota_exceeded = True
-                    print(f"    Image error: {result}")
+                    logger.info(f"    Image error: {result}")
                     text_parts.append(f"[Image could not be described: {result}]")
                 else:
                     text_parts.append(f"[Image description by Gemini Vision]:\n{result}")
@@ -175,7 +184,7 @@ async def forward_to_minimax(body: dict) -> dict:
         headers={"Authorization": f"Bearer {MINIMAX_KEY}"},
         json=body
     )
-    print(f"  MiniMax {resp.status_code} ({len(resp.content)}B)")
+    logger.info(f"  MiniMax {resp.status_code} ({len(resp.content)}B)")
     resp.raise_for_status()
     return resp.json()
 
@@ -189,7 +198,7 @@ async def stream_from_minimax(body: dict):
     ) as resp:
         if resp.status_code != 200:
             error_body = await resp.aread()
-            print(f"  MiniMax stream error: {resp.status_code} {error_body[:200]}")
+            logger.error(f"  MiniMax stream error: {resp.status_code} {error_body[:200]}")
             yield f"data: {json.dumps({'error': {'message': f'MiniMax error {resp.status_code}', 'code': resp.status_code}})}\n\n".encode()
             yield b"data: [DONE]\n\n"
             return
@@ -214,15 +223,14 @@ async def chat_completions(request: Request):
     ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
     tools = body.get("tools", [])
     tool_names = ", ".join(t.get("function", {}).get("name", "?") for t in tools[:5]) if tools else "-"
-    print(f"\n[{ts}] {body.get('model','?')} | msgs={len(messages)} img={'Y' if images else 'N'} "
+    logger.info(f"\n[{ts}] {body.get('model','?')} | msgs={len(messages)} img={'Y' if images else 'N'} "
           f"stream={'Y' if stream else 'N'} tools={tool_names}")
-    print(f"  > {last_message_preview(messages)!r}")
 
     if images:
-        print("  Describing images...")
+        logger.info("  Describing images...")
         messages, quota_exceeded = await replace_images(messages)
         if quota_exceeded:
-            print("  Quota exceeded!")
+            logger.warning("  Quota exceeded!")
             if stream:
                 chunk_response = {
                     "id": "quota_error",
@@ -255,19 +263,19 @@ async def chat_completions(request: Request):
         msg = choice.get("message", {})
         reply = msg.get("content", "") or ""
         tc = msg.get("tool_calls")
-        print(f"  < {choice.get('finish_reason')} | tc={'Y' if tc else 'N'} | {len(reply)}ch: {reply[:100]!r}")
+        logger.info(f"  < {choice.get('finish_reason')} | tc={'Y' if tc else 'N'} | {len(reply)}ch")
         if tc and msg.get("content"):
             msg["content"] = None
         return JSONResponse(result)
 
     except httpx.HTTPStatusError as e:
-        print(f"  ERROR: MiniMax {e.response.status_code}: {e.response.text[:200]}")
+        logger.error(f"  ERROR: MiniMax {e.response.status_code}: {e.response.text[:200]}")
         return JSONResponse({"error": str(e)}, status_code=502)
     except Exception as e:
-        print(f"  ERROR: {e}")
+        logger.error(f"  ERROR: {e}")
         return JSONResponse({"error": str(e)}, status_code=502)
 
 
 if __name__ == "__main__":
-    print(f"LLMProxy on :8080 | MiniMax ...{MINIMAX_KEY[-8:]} | Gemini ...{GEMINI_KEY[-8:]}")
+    logger.info(f"LLMProxy on :8080 | MiniMax ...{MINIMAX_KEY[-8:]} | Gemini ...{GEMINI_KEY[-8:]}")
     uvicorn.run(app, host="127.0.0.1", port=8080)
