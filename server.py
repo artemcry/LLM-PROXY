@@ -37,6 +37,9 @@ if not GEMINI_KEY:
 
 gemini_client = genai.Client(api_key=GEMINI_KEY)
 
+SERVER_HOST = os.environ.get("SERVER_HOST", "127.0.0.1")
+SERVER_PORT = int(os.environ.get("SERVER_PORT", "8087"))
+
 MINIMAX_URL = os.environ.get("MINIMAX_URL", "https://api.minimax.io/v1/chat/completions")
 MINIMAX_MODEL = os.environ.get("MINIMAX_MODEL", "MiniMax-M2.7")
 IMAGE_CACHE_MAX = int(os.environ.get("IMAGE_CACHE_MAX", "256"))
@@ -56,6 +59,15 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.get("/v1/models")
+@app.get("/models")
+async def list_models():
+    return {
+        "object": "list",
+        "data": [{"id": MINIMAX_MODEL, "object": "model"}]
+    }
 
 
 def has_images(messages: list) -> bool:
@@ -277,5 +289,5 @@ async def chat_completions(request: Request):
 
 
 if __name__ == "__main__":
-    logger.info(f"LLMProxy on :8080 | MiniMax ...{MINIMAX_KEY[-8:]} | Gemini ...{GEMINI_KEY[-8:]}")
-    uvicorn.run(app, host="127.0.0.1", port=8080)
+    logger.info(f"LLMProxy on {SERVER_HOST}:{SERVER_PORT} | MiniMax ...{MINIMAX_KEY[-8:]} | Gemini ...{GEMINI_KEY[-8:]}")
+    uvicorn.run(app, host=SERVER_HOST, port=SERVER_PORT)

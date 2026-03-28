@@ -22,13 +22,16 @@ logger = logging.getLogger("llmproxy")
 logger.info(f"--- Server starting at {datetime.datetime.now().isoformat()} ---")
 
 try:
-    from server import app
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    from server import app, SERVER_HOST, SERVER_PORT
     import uvicorn
-    
+
     logger.info("Imports OK, starting uvicorn...")
-    
+
     # Run without uvicorn's default logging config
-    uvicorn.run(app, host="127.0.0.1", port=8080, log_level="info", log_config=None)
+    uvicorn.run(app, host=SERVER_HOST, port=SERVER_PORT, log_level="info", log_config=None)
 except Exception as e:
     logger.exception(f"FATAL: {e}")
     raise
